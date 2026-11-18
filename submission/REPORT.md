@@ -38,7 +38,16 @@ Số liệu từ `02_error_list_v1.csv`. Mỗi số là số dòng báo cáo, tr
 - `img_0007` — Quan sát thấy nhiều ô tô thiếu box `car`. Cả hai vòng QC đều không có cờ cho ảnh này. Model có thể bỏ qua vật thể hoặc dự đoán dưới ngưỡng kiểm.
 
 ## 5. Train: raw vs clean (tùy chọn, chấm riêng)
-**Chưa chạy.** Lần nộp này dùng phần lõi của lab và bỏ qua phần train Colab tùy chọn.
+Đã train YOLO26n (`yolo26n.pt`) trên Colab, 20 epoch mỗi lượt, seed 0 và 1, kích thước ảnh 640, batch 16. Hai biến thể được đo trên cùng tập test. Các giá trị dưới đây là trung bình ± độ lệch chuẩn mẫu giữa hai seed.
+
+| Biến thể | Ảnh trong thư mục train | mAP50 | mAP50–95 |
+|---|---:|---:|---:|
+| raw | 224 | 0,7258 ± 0,0002 | 0,5117 ± 0,0038 |
+| clean | 205 | 0,7004 ± 0,0305 | 0,4863 ± 0,0128 |
+
+Chênh mAP50 (clean − raw) là **−0,0254** (−2,54 điểm phần trăm). Cả hai seed đều cho điểm raw cao hơn, nhưng độ chênh trung bình nhỏ hơn độ lệch chuẩn của clean (0,0305). Với hai seed, chưa đủ cơ sở kết luận pipeline làm giảm chất lượng tổng quát hóa.
+
+Hai giả thuyết cần kiểm: (1) raw có 4 ảnh trùng với test. Đo ảnh hưởng bằng lượt train đối chứng loại riêng 4 ảnh đó, giữ cùng seed và cấu hình. (2) Bản clean vẫn còn 38/205 ảnh có cảnh báo chưa duyệt. Kiểm tra thủ công các cờ còn lại, sửa lỗi xác nhận được rồi so sánh với bản clean hiện tại. Số ảnh loader thực sự dùng cần đối chiếu log Colab. Xem [phân tích chi tiết](results/ANALYSIS.md).
 
 ## 6. Quyết định và ghi chú AI
 Giữ **Hold**. Nếu vẫn có 205 ảnh, cần duyệt tiếp và xử lý cảnh báo của ít nhất 18 trong 38 ảnh còn cờ để còn tối đa 20/205 ảnh (9,76%). Chạy lại QC và xác nhận vẫn còn 0 lỗi bắt buộc trước khi phát hành.
