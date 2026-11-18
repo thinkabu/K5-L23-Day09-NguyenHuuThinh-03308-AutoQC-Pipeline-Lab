@@ -27,13 +27,93 @@ Bẫy cần nghĩ tới (có test cho từng cái)
 
 Gợi ý: `yaml.safe_load / safe_dump`.
 """
-from collections import defaultdict  # noqa: F401
+from collections import defaultdict
 
-import yaml  # noqa: F401
+import yaml
 
-from ..common import ERROR, parse_yolo_line  # noqa: F401
+from ..common import ERROR, parse_yolo_line
+
+
+DROP_CODES = {"BAD_FORMAT", "BAD_CLASS_ID", "BOX_ZERO", "DUP_BOX"}
+REMOVE_CODES = {"LEAK_TEST", "CORRUPT_IMAGE", "BAD_SIZE"}
+
+
+def _clip(text):
+    class_id, x, y, width, height = parse_yolo_line(text)
+    left, top = max(0.0, x - width / 2), max(0.0, y - height / 2)
+    right, bottom = min(1.0, x + width / 2), min(1.0, y + height / 2)
+    if left >= right or top >= bottom:
+        return ""
+    if left == x - width / 2 and right == x + width / 2 and top == y - height / 2 and bottom == y + height / 2:
+        return text
+    return f"{class_id} {(left + right) / 2} {(top + bottom) / 2} {right - left} {bottom - top}"
 
 
 def fix(ds, issues, cfg):
-    # TODO
-    raise NotImplementedError("autofix chưa làm")
+    errors = [issue for issue in issues if issue.severity == ERROR]
+    removals = {
+        issue.image for issue in errors
+        if issue.code in REMOVE_CODES or issue.code.startswith("DUP_IMAGE_")
+    }
+    fixes = []
+
+    def record(image, line, action, before, after):
+        fixes.append({"image": image, "line": line, "action": action, "before": before, "after": after})
+
+    remaining = set()
+    for path in ds.image_files():
+        if path.stem in removals:
+            path.unlink()
+            ds.label_path(path.stem).unlink(missing_ok=True)
+            record(path.stem, None, "remove_image", path.name, "")
+        else:
+            remaining.add(path.stem)
+
+    if any(issue.code == "BAD_CLASS_NAME" for issue in errors):
+        path = ds.yaml_path
+        data = (yaml.safe_load(path.read_text(encoding="utf-8")) or {}) if path.exists() else {}
+        before = data.get("names")
+        names = dict(enumerate(cfg["classes"]))
+        if ds.yaml_names() != names:
+            data["names"] = names
+            path.write_text(yaml.safe_dump(data, allow_unicode=True, sort_keys=False), encoding="utf-8")
+            record("data.yaml", None, "rename_classes", str(before), str(names))
+
+    edits = defaultdict(dict)
+    needs_label = set()
+    for issue in errors:
+        stem, line, code = issue.image, issue.line, issue.code
+        if stem in removals:
+            continue
+        if code == "MISSING_LABEL_FILE":
+            needs_label.add(stem)
+        elif line is not None and code in DROP_CODES:
+            edits[stem][line] = "drop_line"
+        elif line is not None and code == "BOX_OUT_OF_IMAGE":
+            edits[stem].setdefault(line, "clip_box")
+
+    for stem in sorted(needs_label & remaining):
+        if not ds.label_path(stem).exists():
+            record(stem, None, "needs_label", "(không có file)", "chuyển người gán")
+
+    for stem, actions in edits.items():
+        path = ds.label_path(stem)
+        if not path.exists():
+            continue
+        original = path.read_text(encoding="utf-8", errors="replace")
+        updated = []
+        for line, text in enumerate(original.splitlines(keepends=True), 1):
+            action = actions.get(line)
+            if action is None or not text.strip():
+                updated.append(text)
+                continue
+            before = text.rstrip("\r\n")
+            after = _clip(before) if action == "clip_box" else ""
+            if after:
+                updated.append(after + text[len(before):])
+            if after != before:
+                record(stem, line, action if after else "drop_line", before, after)
+        revised = "".join(updated)
+        if revised != original:
+            path.write_text(revised, encoding="utf-8")
+    return fixes
